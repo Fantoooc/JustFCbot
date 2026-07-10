@@ -33,17 +33,6 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
         except Exception as e:
             print(f"Failed to notify admin {admin_id}: {e}")
 
-async def resolve_target(raw: str, context: ContextTypes.DEFAULT_TYPE) -> int | None:
-    if raw.lstrip('-').isdigit(): return int(raw)
-    if raw.startswith('@'):
-        try:
-            chat = await context.bot.get_chat(raw)
-            return chat.id
-        except Exception as e:
-            # print(f"No chat with user {raw}, {e}")
-            return None
-    return None
-
 async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.inline_query.from_user.id
     if user_id in BLACK_LIST: return
@@ -77,39 +66,41 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             raw_id = main[0].strip()
             exc_mode = raw_id.startswith('!')
             id_part = raw_id[1:] if exc_mode else raw_id
-            target_id = await resolve_target(id_part, context)
-            text = main[1].strip()
-            if target_id is not None and text:
-                placeholder_text = parts[1].strip() if len(parts) >= 2 and parts[1].strip() else "Message hided."
-                not_for_you_text = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else "This message is not for you."
+            if id_part.startswith('@') or id_part.isdigit():
+                target_id = id_part
+                text = main[1].strip()
+                if target_id is not None and text:
+                    placeholder_text = parts[1].strip() if len(parts) >= 2 and parts[1].strip() else "Message hided."
+                    not_for_you_text = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else "This message is not for you."
 
-                key = uuid.uuid4().hex[:16]
-                if exc_mode:
-                    secret_messages[key] = {
-                        "sender_id": user_id,
-                        "target_id": target_id,
-                        "text": not_for_you_text,
-                        "not_for_you_text": text
-                    }
-                else:
-                    secret_messages[key] = {
-                        "sender_id": user_id,
-                        "target_id": target_id,
-                        "text": text,
-                        "not_for_you_text": not_for_you_text
-                    }
-                keyboard = InlineKeyboardMarkup([ [InlineKeyboardButton("Message", callback_data=key)] ])
+                    key = uuid.uuid4().hex[:16]
+                    if exc_mode:
+                        secret_messages[key] = {
+                            "sender_id": user_id,
+                            "target_id": target_id,
+                            "text": not_for_you_text,
+                            "not_for_you_text": text
+                        }
+                    else:
+                        secret_messages[key] = {
+                            "sender_id": user_id,
+                            "target_id": target_id,
+                            "text": text,
+                            "not_for_you_text": not_for_you_text
+                        }
+                    keyboard = InlineKeyboardMarkup([ [InlineKeyboardButton("Message", callback_data=key)] ])
 
-                results.append(
-                    InlineQueryResultArticle(
-                        id = key,
-                        title = "Send message",
-                        description = f"To {f'anyone but {target_id}' if exc_mode else target_id}: {text}\nText in message: {placeholder_text}\nTo {target_id if exc_mode else 'anyone'}: {not_for_you_text}",
-                        input_message_content = InputTextMessageContent(message_text = placeholder_text),
-                        reply_markup = keyboard
+                    results.append(
+                        InlineQueryResultArticle(
+                            id = key,
+                            title = "Send message",
+                            description = f"To {f'anyone but {target_id}' if exc_mode else target_id}: {text}\nText in message: {placeholder_text}\nTo {target_id if exc_mode else 'anyone'}: {not_for_you_text}",
+                            input_message_content = InputTextMessageContent(message_text = placeholder_text),
+                            reply_markup = keyboard
+                        )
                     )
-                )
-    await update.inline_query.answer(results, cache_time=30, is_personal=True)
+    try: await update.inline_query.answer(results, cache_time=30, is_personal=True)
+    except BadRequest: return
 
 async def chosen_inline_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = update.chosen_inline_result
@@ -128,12 +119,15 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     message_data = secret_messages.get(message_key)
 
     if not message_data:
-        await query.answer(text="No message in temp data.", show_alert=True)
+        try: await query.answer(text="No message in temp data.", show_alert=True)
+        except BadRequest: return
         return
 
+    target = message_data["target_id"]
+
     if clicker_id == message_data["sender_id"]:
-        await query.answer(text=f"Message for {message_data['target_id']}:\n\n{message_data['text']}\n\nMessage for anyone:\n\n{message_data['not_for_you_text']}", show_alert=True)
-    elif clicker_id == message_data["target_id"]:
+        await query.answer(text=f"Message for {target}:\n\n{message_data['text']}\n\nMessage for anyone:\n\n{message_data['not_for_you_text']}", show_alert=True)
+    elif clicker_id == target or clicker_username == target[1:]:
         await query.answer(text=f"Message:\n\n{message_data['text']}", show_alert=True)
     else: await query.answer(text=message_data["not_for_you_text"], show_alert=True)
     await notify_admins(context,f"User @{clicker_username} ({clicker_id}) clicked on {message_key}")
