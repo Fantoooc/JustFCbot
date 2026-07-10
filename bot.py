@@ -104,7 +104,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     InlineQueryResultArticle(
                         id = key,
                         title = "Send message",
-                        description = f"To {f'anyone but {user_id}' if exc_mode else user_id}: {text}\nText in message: {placeholder_text}\nTo {user_id if exc_mode else 'anyone'}: {not_for_you_text}",
+                        description = f"To {f'anyone but {target_id}' if exc_mode else target_id}: {text}\nText in message: {placeholder_text}\nTo {target_id if exc_mode else 'anyone'}: {not_for_you_text}",
                         input_message_content = InputTextMessageContent(message_text = placeholder_text),
                         reply_markup = keyboard
                     )
@@ -131,7 +131,9 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer(text="No message in temp data.", show_alert=True)
         return
 
-    if clicker_id == message_data["sender_id"] or clicker_id == message_data["target_id"]:
+    if clicker_id == message_data["sender_id"]:
+        await query.answer(text=f"Message for {message_data['target_id']}:\n\n{message_data['text']}\n\nMessage for anyone:\n\n{message_data['not_for_you_text']}", show_alert=True)
+    elif clicker_id == message_data["target_id"]:
         await query.answer(text=f"Message:\n\n{message_data['text']}", show_alert=True)
     else: await query.answer(text=message_data["not_for_you_text"], show_alert=True)
     await notify_admins(context,f"User @{clicker_username} ({clicker_id}) clicked on {message_key}")
