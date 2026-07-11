@@ -197,7 +197,7 @@ async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if target not in BLACK_LIST:
-        BLACK_LIST.append(target)
+        BLACK_LIST.add(target)
         save()
         await update.message.reply_text(f"User {target} blocked.")
     else:
