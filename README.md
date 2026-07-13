@@ -8,7 +8,7 @@ Telegram bot to hide messages from others in public chats
 
 Usage:   
   
-@hidefcbot
+@justmfcbot
 - (flags) userID or @username
 - message or message_for_anyone if exc_flag
 - text displayed in the message
