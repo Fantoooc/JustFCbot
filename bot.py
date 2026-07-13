@@ -123,52 +123,6 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         message_result = build_utumessage(user_id, query)
         if message_result: results.append(message_result)
 
-    """
-    parts = [ part.strip() for part in update.inline_query.query.split('|') ]
-
-    if parts and parts[0]:
-        main = parts[0].split(maxsplit = 1)
-        if len(main) >= 2:
-            raw = main[0]
-            raw_len = len(raw)
-
-            i = 0
-            while i < raw_len and raw[i] in SPECIAL_CHARS:
-                i += 1
-
-            prefx_chars = set(raw[:i])
-            flags = { name: (char in prefx_chars) for char, name in FLAG_MAP.items() }
-
-            target_id = raw[i:]
-            message = main[1].strip()
-
-            if target_id and (target_id[0] == '@' or target_id.isdigit()) and message:
-                placeholder_text = parts[1].strip() if len(parts) >= 2 and parts[1].strip() else "Message hided."
-                not_for_you_text = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else "This message is not for you."
-
-                key = uuid.uuid4().hex[:16]
-                exc_flag, vis_flag = flags["exc_flag"], flags["vis_flag"]
-
-                if exc_flag:
-                    secret_messages[key] = (user_id, target_id, not_for_you_text, message, exc_flag, vis_flag)
-                    to_target_desc = f"To anyone but {target_id}: {message}"
-                    to_others_desc = f"To {target_id}: {not_for_you_text}"
-                else:
-                    secret_messages[key] = (user_id, target_id, message, not_for_you_text, exc_flag, vis_flag)
-                    to_target_desc = f"To {target_id}: {message}"
-                    to_others_desc = f"To anyone: {not_for_you_text}"
-
-                keyboard = InlineKeyboardMarkup([ [InlineKeyboardButton("Message", callback_data=key)] ])
-                results.append(
-                    InlineQueryResultArticle(
-                        id = key,
-                        title = "Send message",
-                        description = f"{to_target_desc}\nText in message: {placeholder_text}\n{to_others_desc}",
-                        input_message_content = InputTextMessageContent(message_text = placeholder_text),
-                        reply_markup = keyboard
-                    )
-                )
-    """
     try: await update.inline_query.answer(results, cache_time=10, is_personal=True)
     except BadRequest: return
 
