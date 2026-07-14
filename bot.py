@@ -86,11 +86,11 @@ def build_utumessage(user_id: int, query: str) -> InlineQueryResultArticle | Non
     exc_flag, vis_flag, del_flag = flags["exc_flag"], flags["vis_flag"], flags["del_flag"]
 
     if exc_flag:
-        secret_messages[key] = (user_id, target_id, not_for_you_text, message, exc_flag, vis_flag, del_flag)
+        secret_messages[key] = (user_id, target_id.lower(), not_for_you_text, message, exc_flag, vis_flag, del_flag)
         to_target_desc = f"To anyone but {target_id}: {message}"
         to_others_desc = f"To {target_id}: {not_for_you_text}"
     else:
-        secret_messages[key] = (user_id, target_id, message, not_for_you_text, exc_flag, vis_flag, del_flag)
+        secret_messages[key] = (user_id, target_id.lower(), message, not_for_you_text, exc_flag, vis_flag, del_flag)
         to_target_desc = f"To {target_id}: {message}"
         to_others_desc = f"To anyone: {not_for_you_text}"
 
@@ -247,26 +247,6 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     message_key = message[1]
     message_data = secret_messages.get(message_key)
 
-    if act == "del":
-        data = secret_messages.get(message_key)
-        is_username_match = (
-            data[1] and
-            clicker_username and
-            data[1].lstrip('@').lower() == clicker_username.lower()
-        )
-        if not data or not (data[0] == clicker_id or data[1] == clicker_id or is_username_match):
-            await query.answer("You can't delete this message.", show_alert=True, cache_time=3600)
-            return
-
-        if data[0] != clicker_id and data[4] and data[6]:
-            await query.answer("You can't delete this message.", show_alert=True, cache_time=3600)
-            return
-
-        del secret_messages[message_key]
-        await query.edit_message_text(f"Message {message_key} burned 🔥.")
-        await query.answer()
-        return
-
     if clicker_id in ADMINS_IDS or clicker_id in VIPS_LIST:
         if act == "ev_add":
             event = message[2]
@@ -299,25 +279,42 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     other_text = message_data[3]
 
     exc_flag = message_data[4]
+    vis_flag = message_data[5]
+    del_flag = message_data[6]
+
+    clicker_sender = clicker_id == sender
+    clicker_target = str(clicker_id) == target or (clicker_username and clicker_username.lower() == target[1:])
 
     key_message = f"\n\n\nMessage id is: {message_key}"
 
-    if clicker_id == sender:
-        text = f"Message for {target}:\n{target_text}\n\nMessage for anyone:\n{other_text}{key_message}"
-    elif clicker_id == target or clicker_username == target[1:]:
+    if clicker_sender: text = f"Message for {target}:\n{target_text}\n\nMessage for anyone:\n{other_text}{key_message}"
+    elif clicker_target:
         if exc_flag: text = f"Message:\n{target_text}"
         else:
-            if message_data[5]:
+            if vis_flag:
                 text = f"Message for you:\n{target_text}\n\nMessage for anyone:\n{other_text}{key_message}"
             else:
                 text = f"Message:\n{target_text}{key_message}"
             secret_messages[message_key] = mark_seen(message_data)
     else:
-        if exc_flag and message_data[5]: text = f"Message for anyone:\n{other_text}\n\nMessage for {target}:\n{target_text}"
+        if exc_flag and vis_flag: text = f"Message for anyone:\n{other_text}\n\nMessage for {target}:\n{target_text}"
         else: text = f"Message:\n{other_text}"
 
-    if act == "senddm":
-        if clicker_id != target and clicker_username != target[1:] and clicker_id != sender: return
+    if act == "del":
+        if del_flag:
+            await query.answer("This message cannot be deleted.", show_alert=True, cache_time=3600)
+            return
+        if not (clicker_sender or (clicker_target and not exc_flag)):
+            await query.answer("You can't delete this message.", show_alert=True, cache_time=3600)
+            return
+
+        del secret_messages[message_key]
+        await query.edit_message_text(f"Message {message_key} burned 🔥.")
+        await query.answer()
+        return
+
+    if sddm:
+        if not (clicker_sender or clicker_target or exc_flag): return
         try:
             await context.bot.send_message(chat_id=clicker_id, text=text)
             await query.answer()
@@ -325,20 +322,20 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.answer("Couldn't reach that user — they need to start a chat with the bot first.", show_alert=True)
         return
 
+    await notify_admins(context,f"User @{clicker_username} ({clicker_id}) clicked on {message_key}")
     if len(text) <= 200:
         await query.answer(text=text, show_alert=True)
     else:
-        if clicker_id != target and clicker_username != target[1:] and clicker_id != sender: return
+        if not (clicker_sender or clicker_target or exc_flag): return
         await query.answer(text="Message is too long for a popup.\nTap the button below to send full text in bot chat.\nIf you don't have a chat with the bot you won't get the message.", show_alert=True)
         keyboard = [
             [InlineKeyboardButton("Message", callback_data=f"utumessage:{message_key}")],
-            [InlineKeyboardButton("Open full message in DM", callback_data=f"senddm:{message_key}:clicker_id")]
+            [InlineKeyboardButton("Open full message in DM", callback_data=f"senddm:{message_key}")]
         ]
         try:
             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
             if "Message is not modified" not in str(e): raise
-    await notify_admins(context,f"User @{clicker_username} ({clicker_id}) clicked on {message_key}")
 
 
 
