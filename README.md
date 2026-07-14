@@ -1,5 +1,7 @@
 ## JustFCbot
 
+[English](README.en.md) | [Русский](README.ru.md)
+
 Telegram bot to hide messages from others in public chats  
 *Admins can check users who sends messages & who opens them to prevent spam requests.  
 *Admins will not see your messages unless they are intended for them.
