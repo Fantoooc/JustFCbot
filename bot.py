@@ -1,7 +1,8 @@
 import asyncio
 import json
 import uuid
-from datetime import datetime
+from re import findall, subn
+from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, User, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, InlineQueryHandler, CommandHandler, ChosenInlineResultHandler
@@ -19,6 +20,7 @@ CONFIG_LIST = "config.jsonl"
 LIST = "list.jsonl"
 
 secret_messages: dict[str, tuple] = {}
+messages: dict[str, tuple[str, set]] = {}
 
 SPECIAL_CHARS = set("!&$")
 FLAG_MAP = {
@@ -78,7 +80,7 @@ def build_utumessage(user_id: int, query: str) -> InlineQueryResultArticle | Non
     target_id = raw[i:]
     message = main[1].strip()
 
-    if not (target_id and (target_id[0] == '@' or target_id.isdigit()) and message): return None
+    if not (target_id and len(target_id) > 1 and (target_id[0] == '@' or target_id.isdigit()) and message): return None
     placeholder_text = parts[1].strip() if len(parts) >= 2 and parts[1].strip() else "Message hided."
     not_for_you_text = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else "This message is not for you."
 
@@ -100,6 +102,17 @@ def build_utumessage(user_id: int, query: str) -> InlineQueryResultArticle | Non
         title = "Send message",
         description = f"{to_target_desc[:40]}...\nText in message: {placeholder_text[:40]}...\n{to_others_desc[:40]}...",
         input_message_content = InputTextMessageContent(message_text = placeholder_text),
+        reply_markup = keyboard
+    )
+
+def build_message(user_id: int, query: str) -> InlineQueryResultArticle | None:
+    data = messages.get(query)
+    if data is None: return None
+    keyboard = InlineKeyboardMarkup([ [InlineKeyboardButton("Send dmessage", callback_data=f"dmessage:{query}")] ])
+    return InlineQueryResultArticle(
+        id = query,
+        title = "Send button to open dmessage",
+        input_message_content = InputTextMessageContent(message_text = "DMessage"),
         reply_markup = keyboard
     )
 
@@ -146,7 +159,7 @@ def build_event(user_id: int, query: str):
         )
     elif query.lower().startswith("add "):
         if not (user_id in ADMINS_IDS or user_id in VIPS_LIST): return
-        event = query[4:86].strip()
+        event = query[4:40].strip()
         if not event: return
         key = uuid.uuid4().hex[:16]
         keyboard = InlineKeyboardMarkup([ [InlineKeyboardButton(f"Add event *{event}*", callback_data=f"ev_add:{key}:{event}")] ])
@@ -158,7 +171,7 @@ def build_event(user_id: int, query: str):
         )
     elif query.lower().startswith("remove "):
         if not (user_id in ADMINS_IDS or user_id in VIPS_LIST): return
-        search_key = query[7:86].strip().lower()
+        search_key = query[7:40].strip().lower()
         results = []
 
         for key, event_data in EVENTS_LIST.items():
@@ -218,8 +231,11 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if event:
             if isinstance(event, list): results.extend(event)
             else: results.append(event)
-    else:
-        message_result = build_utumessage(user_id, query)
+    elif query.lower().startswith("dmessage"):
+        message_result = build_message(user_id, query[8:].strip())
+        if message_result: results.append(message_result)
+    elif query.lower().startswith("message"):
+        message_result = build_utumessage(user_id, query[7:].strip())
         if message_result: results.append(message_result)
 
     try: await update.inline_query.answer(results, cache_time=5, is_personal=True)
@@ -231,6 +247,13 @@ async def chosen_inline_result(update: Update, context: ContextTypes.DEFAULT_TYP
     message_data = secret_messages.get(key)
     if not message_data: return
     await notify_admins(context, f"New message sent from: {message_data[0]}")
+
+async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    for admin_id in NOTIFICATIONS_LIST:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text)
+        except Exception as e:
+            print(f"Failed to notify admin {admin_id}: {e}")
 
 def mark_seen(data: tuple) -> tuple:
     if data[2].endswith("  ✓✓"): return data
@@ -245,7 +268,23 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     message = query.data.split(':')
     act = message[0]
     message_key = message[1]
-    message_data = secret_messages.get(message_key)
+
+    if act == "dmessage":
+        raw = messages.get(message_key)
+        if raw is None:
+            await query.answer()
+            return
+        data, users = raw[0], raw[1]
+        if clicker_username and clicker_username.lower() in users:
+            try:
+                await context.bot.send_message(chat_id=clicker_id, text=f"Message key: {message_key}\nMessage:\n{data}")
+                await query.answer()
+                await notify_admins(context, f"User {clicker_id} opened dmessage")
+            except Forbidden:
+                await query.answer("You need to start a chat with the bot first.", show_alert=True)
+            return
+        await query.answer("This message is not for you.", show_alert=True, cache_time=3600)
+        return
 
     if clicker_id in ADMINS_IDS or clicker_id in VIPS_LIST:
         if act == "ev_add":
@@ -258,14 +297,17 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
         elif act == "ev_remove":
             event = message[2]
+            if message_key not in EVENTS_LIST:
+                await query.answer("Event already removed.", show_alert=True)
+                return
             del EVENTS_LIST[message_key]
             save()
             await query.edit_message_text(f"Event *{event}* was removed")
             await query.answer()
             return
 
-    sddm = act == "senddm"
-    if not message_data and not sddm:
+    message_data = secret_messages.get(message_key)
+    if not message_data:
         try: await query.answer(text="No message in temp data.", show_alert=True, cache_time=3600)
         except BadRequest: return
         return
@@ -307,13 +349,16 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         if not (clicker_sender or (clicker_target and not exc_flag)):
             await query.answer("You can't delete this message.", show_alert=True, cache_time=3600)
             return
+        if message_key not in secret_messages:
+            await query.answer("Message already deleted.", show_alert=True, cache_time=3600)
+            return
 
         del secret_messages[message_key]
         await query.edit_message_text(f"Message {message_key} burned 🔥.")
         await query.answer()
         return
 
-    if sddm:
+    if act == "senddm":
         if not (clicker_sender or clicker_target or exc_flag): return
         try:
             await context.bot.send_message(chat_id=clicker_id, text=text)
@@ -328,16 +373,14 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     else:
         if not (clicker_sender or clicker_target or exc_flag): return
         await query.answer(text="Message is too long for a popup.\nTap the button below to send full text in bot chat.\nIf you don't have a chat with the bot you won't get the message.", show_alert=True)
-        keyboard = [
-            [InlineKeyboardButton("Message", callback_data=f"utumessage:{message_key}")],
-            [InlineKeyboardButton("Open full message in DM", callback_data=f"senddm:{message_key}")]
-        ]
+        keyboard = [[
+            InlineKeyboardButton("Message", callback_data=f"utumessage:{message_key}"),
+            InlineKeyboardButton("Open full message in DM", callback_data=f"senddm:{message_key}")
+        ]]
         try:
             await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
             if "Message is not modified" not in str(e): raise
-
-
 
 async def notifications_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -350,13 +393,6 @@ async def notifications_command(update: Update, context: ContextTypes.DEFAULT_TY
         NOTIFICATIONS_LIST.add(user_id)
         save()
         await update.message.reply_text("Notifications enabled.")
-
-async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    for admin_id in NOTIFICATIONS_LIST:
-        try:
-            await context.bot.send_message(chat_id=admin_id, text=text)
-        except Exception as e:
-            print(f"Failed to notify admin {admin_id}: {e}")
 
 async def block_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -408,6 +444,32 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     await update.message.reply_text("Blacklist:\n" + "\n".join(str(i) for i in BLACK_LIST))
 
+async def message_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id in BLACK_LIST: return
+    if not context.args:
+        await update.message.reply_text("Usage: /message <message>")
+        return
+
+    diff = int(86400 - (datetime.now() - start_time).total_seconds())
+    if diff < 0: return
+
+    hours, remainder = divmod(diff, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    key = uuid.uuid4().hex[:16]
+    raw = " ".join(context.args)
+    usernames = set(findall(r"=\$\@(\w+)", raw)) | {update.effective_user.username}
+    usernames = {name.lower() for name in usernames if name}
+    message, count = subn(r"=\$\@\w+", "", raw)
+    message = message.strip()
+    messages[key] = (message, usernames)
+
+    await update.message.reply_text(
+        text = f"Remaining time: {hours}ч. {minutes}мин. {seconds}с.\nMessage key: {key}\nUsers who can see message by key:\n{'@' + '\n@'.join(usernames)}\nMessage:\n{message}"
+    )
+    await notify_admins(context, f"New message from {user_id}")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     text = (
@@ -446,6 +508,7 @@ def main():
     app.add_handler(CommandHandler("block", block_command))
     app.add_handler(CommandHandler("unblock", unblock_command))
     app.add_handler(CommandHandler("blacklist", blacklist_command))
+    app.add_handler(CommandHandler("message", message_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("info", info))
 
@@ -453,6 +516,7 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
+    start_time = datetime.now()
     load_config()
     load()
     main()
